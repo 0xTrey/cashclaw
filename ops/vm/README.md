@@ -45,6 +45,7 @@ bash /home/worker/openclaw-crypto-worker/ops/vm/deploy-worker-host-dry-run.sh
 ```
 
 This starts the worker in `dry-run` mode with a placeholder wallet address so you can test the full remote flow before creating or funding a burner wallet.
+The deploy helper copies secrets into a container-only runtime directory owned by the container user and mounts that directory read-only.
 
 ## Live mode later
 

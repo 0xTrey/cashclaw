@@ -20,22 +20,11 @@ services:
       OPENCLAW_CRYPTO_WORKER_HOST: 0.0.0.0
       OPENCLAW_CRYPTO_WORKER_PORT: 3777
       OPENCLAW_CRYPTO_WORKER_MODE: live
-      BASE_RPC_URL_FILE: /run/secrets/base_rpc_url
-      CRYPTO_WORKER_TOKEN_FILE: /run/secrets/crypto_worker_token
-      BURNER_PRIVATE_KEY_FILE: /run/secrets/burner_private_key
+      BASE_RPC_URL_FILE: /run/app-secrets/base_rpc_url.txt
+      CRYPTO_WORKER_TOKEN_FILE: /run/app-secrets/crypto_worker_token.txt
+      BURNER_PRIVATE_KEY_FILE: /run/app-secrets/burner_private_key.txt
     volumes:
       - ./runtime-state:/var/lib/openclaw-crypto-worker
+      - ./runtime-secrets:/run/app-secrets:ro
     ports:
       - "${OPENCLAW_CRYPTO_VM_TAILSCALE_IP}:3777:3777"
-    secrets:
-      - base_rpc_url
-      - crypto_worker_token
-      - burner_private_key
-
-secrets:
-  base_rpc_url:
-    file: ./runtime-secrets/base_rpc_url.txt
-  crypto_worker_token:
-    file: ./runtime-secrets/crypto_worker_token.txt
-  burner_private_key:
-    file: ./runtime-secrets/burner_private_key.txt
