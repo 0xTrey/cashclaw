@@ -6,7 +6,9 @@ This folder is the deployment kit for moving the worker off your Mac and onto a 
 
 - Docker Engine installed from Docker's official Ubuntu apt repository
 - Tailscale installed using Tailscale's current Linux installer
+- Ubuntu security updates applied and unattended upgrades enabled
 - A dedicated Linux user for the worker
+- UFW enabled with default-deny inbound, SSH allowed, and the Tailscale interface trusted
 - A Docker Compose deployment that binds the worker only to the host's Tailscale IPv4
 
 Official sources used:

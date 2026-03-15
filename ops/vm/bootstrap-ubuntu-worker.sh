@@ -15,7 +15,8 @@ SECRETS_DIR="${SECRETS_DIR:-/etc/openclaw-crypto-worker/secrets}"
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
-apt-get install -y ca-certificates curl git jq ufw
+apt-get upgrade -y
+apt-get install -y ca-certificates curl git jq ufw unattended-upgrades
 
 # Docker Engine install follows Docker's official Ubuntu apt-repository instructions.
 apt-get remove -y docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc || true
@@ -36,6 +37,15 @@ systemctl enable --now docker
 # Tailscale install follows Tailscale's current Linux install guidance.
 curl -fsSL https://tailscale.com/install.sh | sh
 systemctl enable --now tailscaled
+
+# Keep the host closed by default and rely on Tailscale for worker access.
+ufw --force reset
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp comment 'SSH'
+ufw allow in on tailscale0 comment 'Tailscale'
+ufw --force enable
+dpkg-reconfigure -f noninteractive unattended-upgrades
 
 if ! id "${WORKER_USER}" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash "${WORKER_USER}"
@@ -64,4 +74,5 @@ Next steps:
 Notes:
   - Docker Engine install source: https://docs.docker.com/engine/install/ubuntu/
   - Tailscale install source: https://tailscale.com/docs/install/linux
+  - UFW defaults to deny incoming, allows SSH, and trusts only the Tailscale interface
 EOF
