@@ -230,10 +230,18 @@ async function handleApi(
         }, ctx.env);
 
         const execution = await ctx.service.execute(ctx.config, body, quote);
-        const portfolioAfter = execution.mode === "dry-run"
-          ? portfolioBefore
-          : await ctx.service.getPortfolio(ctx.config);
-        const pnlDeltaUsd = execution.mode === "dry-run"
+        let portfolioAfter = portfolioBefore;
+        let postTradeRefreshError: string | undefined;
+
+        if (execution.mode !== "dry-run") {
+          try {
+            portfolioAfter = await ctx.service.getPortfolio(ctx.config);
+          } catch (error) {
+            postTradeRefreshError = error instanceof Error ? error.message : String(error);
+          }
+        }
+
+        const pnlDeltaUsd = execution.mode === "dry-run" || postTradeRefreshError
           ? 0
           : Number((portfolioAfter.totalUsd - portfolioBefore.totalUsd).toFixed(4));
 
@@ -250,7 +258,11 @@ async function handleApi(
           portfolio: portfolioAfter,
           pnlDeltaUsd,
           policySnapshot,
-          reason: execution.status === "failed" ? execution.error : undefined,
+          reason: execution.status === "failed"
+            ? execution.error
+            : postTradeRefreshError
+              ? `Post-trade portfolio refresh failed: ${postTradeRefreshError}`
+              : undefined,
         }, ctx.env);
 
         appendLedgerEntry({
@@ -258,6 +270,9 @@ async function handleApi(
           type: "portfolio_snapshot",
           request: body,
           portfolio: portfolioAfter,
+          reason: postTradeRefreshError
+            ? `Post-trade portfolio refresh failed: ${postTradeRefreshError}`
+            : undefined,
           policySnapshot,
           pnlDeltaUsd,
         }, ctx.env);
