@@ -22,10 +22,31 @@ Official sources used:
   - Run once as `root` on a fresh Ubuntu 24.04 or 22.04 host
 - `deploy-worker-host.sh`
   - Run as the `worker` user after the repo is copied onto the VM and secrets exist
+- `deploy-worker-host-dry-run.sh`
+  - Run as the `worker` user for a safe first boot with no private key and no funds
 - `docker-compose.vm.yml`
   - Live-mode deployment bound to the Tailscale IP only
+- `docker-compose.vm-dry-run.yml`
+  - Dry-run deployment bound to the Tailscale IP only
 
-## Fast path
+## Safe first boot
+
+On the Ubuntu VM:
+
+```bash
+sudo mkdir -p /etc/openclaw-crypto-worker/secrets
+sudo chmod 700 /etc/openclaw-crypto-worker/secrets
+sudo sh -c 'printf "%s\n" "https://mainnet.base.org" > /etc/openclaw-crypto-worker/secrets/base_rpc_url.txt'
+sudo sh -c 'openssl rand -hex 24 > /etc/openclaw-crypto-worker/secrets/crypto_worker_token.txt'
+sudo sh -c 'printf "%s\n" "0x000000000000000000000000000000000000dEaD" > /etc/openclaw-crypto-worker/secrets/burner_wallet_address.txt'
+sudo chmod 600 /etc/openclaw-crypto-worker/secrets/*.txt
+sudo chown -R worker:worker /home/worker/openclaw-crypto-worker
+sudo -u worker bash /home/worker/openclaw-crypto-worker/ops/vm/deploy-worker-host-dry-run.sh
+```
+
+This starts the worker in `dry-run` mode with a placeholder wallet address so you can test the full remote flow before creating or funding a burner wallet.
+
+## Live mode later
 
 On the Ubuntu VM:
 
