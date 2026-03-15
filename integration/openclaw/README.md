@@ -33,6 +33,7 @@ crypto_worker portfolio
 crypto_worker history --limit 20
 crypto_worker quote --side buy --usd 5
 crypto_worker trade --side buy --usd 5 --thesis "Tiny probe after policy check"
+crypto_worker_daily_brief
 crypto_worker pause
 crypto_worker resume
 ```
@@ -58,3 +59,18 @@ You may resume the worker, submit at most one $5 trade with /Users/treyharnden/P
 Keep the thesis under 120 characters and never attempt any action outside the wrapper commands.
 If any step fails, pause the worker and stop.
 ```
+
+## Daily brief wrapper
+
+Use the read-only daily brief wrapper when you want a 24-hour operator summary without granting an agent broad shell access:
+
+```bash
+/Users/treyharnden/Projects/cashclaw-security-review/integration/openclaw/crypto_worker_daily_brief
+```
+
+It summarizes:
+
+- current mode, pause state, and balances
+- trades, failures, and rejects from the last 24 hours
+- hourly cron health and next run time
+- the daily brief cron status itself
