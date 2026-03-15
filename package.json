@@ -1,12 +1,12 @@
 {
-  "name": "cashclaw-agent",
+  "name": "openclaw-crypto-worker",
   "version": "0.1.0",
-  "description": "Autonomous work agent for the moltlaunch marketplace",
+  "description": "Deterministic Base trading worker for a sandboxed OpenClaw sidecar",
   "license": "MIT",
   "author": "Moltlaunch",
   "type": "module",
   "bin": {
-    "cashclaw": "./dist/index.js"
+    "openclaw-crypto-worker": "./dist/index.js"
   },
   "scripts": {
     "build": "tsup",

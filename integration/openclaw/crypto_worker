@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+DEFAULT_ENV_FILES=(
+  "${OPENCLAW_CRYPTO_ENV_FILE:-}"
+  "${SCRIPT_DIR}/crypto-worker.env"
+  "${HOME}/.openclaw/crypto-worker.env"
+)
+
+load_env_file() {
+  for env_file in "${DEFAULT_ENV_FILES[@]}"; do
+    if [[ -n "$env_file" && -f "$env_file" ]]; then
+      # shellcheck disable=SC1090
+      source "$env_file"
+      break
+    fi
+  done
+}
+
+load_env_file
+
+if [[ -z "${CRYPTO_WORKER_URL:-}" ]]; then
+  echo "CRYPTO_WORKER_URL is required." >&2
+  exit 1
+fi
+
+if [[ -z "${CRYPTO_WORKER_TOKEN:-}" ]]; then
+  echo "CRYPTO_WORKER_TOKEN is required." >&2
+  exit 1
+fi
+
+COMMAND="${1:-}"
+shift || true
+
+request() {
+  local method="$1"
+  local path="$2"
+  local body="${3:-}"
+
+  if [[ -n "$body" ]]; then
+    curl --fail --silent --show-error \
+      -X "$method" \
+      -H "Authorization: Bearer ${CRYPTO_WORKER_TOKEN}" \
+      -H "Content-Type: application/json" \
+      "${CRYPTO_WORKER_URL}${path}" \
+      -d "$body"
+  else
+    curl --fail --silent --show-error \
+      -X "$method" \
+      -H "Authorization: Bearer ${CRYPTO_WORKER_TOKEN}" \
+      "${CRYPTO_WORKER_URL}${path}"
+  fi
+}
+
+json_quote() {
+  local side="$1"
+  local usd="$2"
+  node -e 'const [side, usd] = process.argv.slice(1); process.stdout.write(JSON.stringify({ pair: "USDC/WETH", side, notionalUsd: Number(usd) }));' "$side" "$usd"
+}
+
+json_trade() {
+  local side="$1"
+  local usd="$2"
+  local thesis="$3"
+  local session_id="${4:-${OPENCLAW_CRYPTO_SOURCE_SESSION_ID:-manual-$(date +%s)}}"
+  node -e 'const [side, usd, thesis, sessionId] = process.argv.slice(1); process.stdout.write(JSON.stringify({ pair: "USDC/WETH", side, notionalUsd: Number(usd), thesis, source: "openclaw", sourceSessionId: sessionId }));' "$side" "$usd" "$thesis" "$session_id"
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  crypto_worker status
+  crypto_worker policy
+  crypto_worker portfolio
+  crypto_worker history [--limit N]
+  crypto_worker quote --side buy|sell --usd <amount>
+  crypto_worker trade --side buy|sell --usd <amount> --thesis "<short text>" [--session-id <id>]
+  crypto_worker pause
+  crypto_worker resume
+EOF
+}
+
+parse_side_and_usd() {
+  local side=""
+  local usd=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --side) side="${2:-}"; shift 2 ;;
+      --usd) usd="${2:-}"; shift 2 ;;
+      *) echo "Unknown flag: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  if [[ -z "$side" || -z "$usd" ]]; then
+    echo "--side and --usd are required." >&2
+    exit 1
+  fi
+
+  printf '%s:%s\n' "$side" "$usd"
+}
+
+case "$COMMAND" in
+  status)
+    request GET /api/health
+    ;;
+  policy)
+    request GET /api/policy
+    ;;
+  portfolio)
+    request GET /api/portfolio
+    ;;
+  history)
+    limit=50
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --limit) limit="${2:-50}"; shift 2 ;;
+        *) echo "Unknown flag: $1" >&2; exit 1 ;;
+      esac
+    done
+    request GET "/api/history?limit=${limit}"
+    ;;
+  quote)
+    parsed="$(parse_side_and_usd "$@")"
+    side="${parsed%%:*}"
+    usd="${parsed#*:}"
+    request POST /api/quote "$(json_quote "${side}" "${usd}")"
+    ;;
+  trade)
+    side=""
+    usd=""
+    thesis=""
+    session_id=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --side) side="${2:-}"; shift 2 ;;
+        --usd) usd="${2:-}"; shift 2 ;;
+        --thesis) thesis="${2:-}"; shift 2 ;;
+        --session-id) session_id="${2:-}"; shift 2 ;;
+        *) echo "Unknown flag: $1" >&2; exit 1 ;;
+      esac
+    done
+    if [[ -z "$side" || -z "$usd" || -z "$thesis" ]]; then
+      echo "--side, --usd, and --thesis are required." >&2
+      exit 1
+    fi
+    request POST /api/trade-intents "$(json_trade "$side" "$usd" "$thesis" "$session_id")"
+    ;;
+  pause)
+    request POST /api/pause
+    ;;
+  resume)
+    request POST /api/resume
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

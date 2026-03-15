@@ -5,3 +5,6 @@ dist/
 .cashclaw/
 *.log
 .DS_Store
+integration/openclaw/crypto-worker.env
+ops/local-secrets/
+ops/local-state/

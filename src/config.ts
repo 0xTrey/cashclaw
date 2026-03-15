@@ -1,146 +1,201 @@
 import fs from "node:fs";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { privateKeyToAccount } from "viem/accounts";
+import type { Address } from "viem";
+import {
+  ALLOWED_PAIR,
+  APP_NAME,
+  BASE_CHAIN_ID,
+  BASE_CHAIN_NAME,
+  BASE_TOKENS,
+  DEFAULT_HISTORY_LIMIT,
+  DEFAULT_HOST,
+  DEFAULT_PORT,
+  UNISWAP_BASE,
+} from "./crypto/constants.js";
+import type { RiskConfig, WorkerConfig } from "./crypto/types.js";
 
-export interface LLMConfig {
-  provider: "anthropic" | "openai" | "openrouter";
-  model: string;
-  apiKey: string;
-}
+const APP_HOME_DIR = ".openclaw-crypto-worker";
+const CONFIG_FILE = "config.json";
+const LEDGER_FILE = "ledger.jsonl";
 
-export interface PricingConfig {
-  strategy: "fixed" | "complexity";
-  baseRateEth: string;
-  maxRateEth: string;
-}
-
-export interface PollingConfig {
-  intervalMs: number;
-  urgentIntervalMs: number;
-}
-
-export interface PersonalityConfig {
-  tone: "professional" | "casual" | "friendly" | "technical";
-  responseStyle: "concise" | "detailed" | "balanced";
-  customInstructions?: string;
-}
-
-export interface CashClawConfig {
-  agentId: string;
-  llm: LLMConfig;
-  polling: PollingConfig;
-  pricing: PricingConfig;
-  specialties: string[];
-  autoQuote: boolean;
-  autoWork: boolean;
-  maxConcurrentTasks: number;
-  maxLoopTurns?: number;
-  declineKeywords: string[];
-  personality?: PersonalityConfig;
-  learningEnabled: boolean;
-  studyIntervalMs: number;
-  agentCashEnabled: boolean;
-}
-
-const CONFIG_DIR = path.join(os.homedir(), ".cashclaw");
-const CONFIG_PATH = path.join(CONFIG_DIR, "cashclaw.json");
-
-const DEFAULT_CONFIG: Omit<CashClawConfig, "agentId" | "llm"> = {
-  polling: { intervalMs: 30000, urgentIntervalMs: 10000 },
-  pricing: { strategy: "fixed", baseRateEth: "0.005", maxRateEth: "0.05" },
-  specialties: [],
-  autoQuote: true,
-  autoWork: true,
-  maxConcurrentTasks: 3,
-  declineKeywords: [],
-  learningEnabled: true,
-  studyIntervalMs: 1_800_000, // 30 minutes
-  agentCashEnabled: false,
+const DEFAULT_RISK: RiskConfig = {
+  maxTradeUsd: 5,
+  maxDailyNotionalUsd: 15,
+  maxTrades24h: 3,
+  maxWethExposurePct: 50,
+  maxSlippageBps: 100,
+  minGasReserveEth: 0.0005,
+  killSwitchLossUsd24h: 10,
 };
 
-export function loadConfig(): CashClawConfig | null {
-  if (!fs.existsSync(CONFIG_PATH)) return null;
+function readValueOrFile(key: string, env = process.env): string | undefined {
+  const direct = env[key]?.trim();
+  if (direct) {
+    return direct;
+  }
+
+  const filePath = env[`${key}_FILE`]?.trim();
+  if (!filePath) {
+    return undefined;
+  }
+
+  return fs.readFileSync(filePath, "utf8").trim();
+}
+
+function getStateDirFromEnv(env = process.env): string {
+  return env.OPENCLAW_CRYPTO_WORKER_HOME
+    ? path.resolve(env.OPENCLAW_CRYPTO_WORKER_HOME)
+    : path.join(os.homedir(), APP_HOME_DIR);
+}
+
+export function getStateDir(env = process.env): string {
+  return getStateDirFromEnv(env);
+}
+
+export function getConfigPath(env = process.env): string {
+  return path.join(getStateDirFromEnv(env), CONFIG_FILE);
+}
+
+export function getLedgerPath(env = process.env): string {
+  return path.join(getStateDirFromEnv(env), LEDGER_FILE);
+}
+
+export function hashAuthToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function atomicWriteJson(filePath: string, value: unknown): void {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tempPath = `${filePath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(value, null, 2));
+  fs.renameSync(tempPath, filePath);
+  fs.chmodSync(filePath, 0o600);
+}
+
+function getWalletAddressFromEnv(env = process.env): Address {
+  const privateKey = readValueOrFile("BURNER_PRIVATE_KEY", env);
+  if (privateKey) {
+    return privateKeyToAccount(privateKey as `0x${string}`).address;
+  }
+
+  const walletAddress = readValueOrFile("BURNER_WALLET_ADDRESS", env);
+  if (walletAddress) {
+    return walletAddress as Address;
+  }
+
+  throw new Error(
+    "Missing wallet material. Set BURNER_PRIVATE_KEY or BURNER_WALLET_ADDRESS on the worker host.",
+  );
+}
+
+export function buildDefaultConfig(env = process.env): WorkerConfig {
+  const authToken = readValueOrFile("CRYPTO_WORKER_TOKEN", env);
+  const rpcUrl = readValueOrFile("BASE_RPC_URL", env);
+
+  if (!authToken?.trim()) {
+    throw new Error("Missing CRYPTO_WORKER_TOKEN for initial worker bootstrap.");
+  }
+
+  if (!rpcUrl?.trim()) {
+    throw new Error("Missing BASE_RPC_URL for initial worker bootstrap.");
+  }
+
+  const executionMode = env.OPENCLAW_CRYPTO_WORKER_MODE === "live" ? "live" : "dry-run";
+  const port = Number.parseInt(env.OPENCLAW_CRYPTO_WORKER_PORT ?? `${DEFAULT_PORT}`, 10);
+
+  return {
+    appName: APP_NAME,
+    executionMode,
+    chain: {
+      id: BASE_CHAIN_ID,
+      name: BASE_CHAIN_NAME,
+      rpcUrl,
+    },
+    server: {
+      host: env.OPENCLAW_CRYPTO_WORKER_HOST ?? DEFAULT_HOST,
+      port: Number.isFinite(port) ? port : DEFAULT_PORT,
+    },
+    wallet: {
+      address: getWalletAddressFromEnv(env),
+      privateKeyEnvVar: "BURNER_PRIVATE_KEY",
+    },
+    authTokenHash: hashAuthToken(authToken),
+    paused: true,
+    pair: ALLOWED_PAIR,
+    allowedPairs: [ALLOWED_PAIR],
+    tokens: {
+      USDC: { ...BASE_TOKENS.USDC },
+      WETH: { ...BASE_TOKENS.WETH },
+    },
+    uniswap: {
+      factory: UNISWAP_BASE.factory,
+      quoterV2: UNISWAP_BASE.quoterV2,
+      swapRouter02: UNISWAP_BASE.swapRouter02,
+      routerAllowlist: [UNISWAP_BASE.swapRouter02],
+      spenderAllowlist: [UNISWAP_BASE.swapRouter02],
+      poolFee: UNISWAP_BASE.poolFee,
+    },
+    risk: { ...DEFAULT_RISK },
+    historyLimit: DEFAULT_HISTORY_LIMIT,
+  };
+}
+
+export function readWorkerSecret(key: string, env = process.env): string | undefined {
+  return readValueOrFile(key, env);
+}
+
+export function saveConfig(config: WorkerConfig, env = process.env): void {
+  atomicWriteJson(getConfigPath(env), config);
+}
+
+export function loadConfig(env = process.env): WorkerConfig | null {
+  const configPath = getConfigPath(env);
+  if (!fs.existsSync(configPath)) {
+    return null;
+  }
+
   try {
-    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as CashClawConfig;
-    if (!parsed || typeof parsed !== "object") return null;
+    const raw = fs.readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(raw) as WorkerConfig;
     return parsed;
   } catch {
     return null;
   }
 }
 
-export function requireConfig(): CashClawConfig {
-  const config = loadConfig();
-  if (!config) {
-    throw new Error(
-      "No config found. Run `cashclaw init` first.",
-    );
+export function ensureConfig(env = process.env): WorkerConfig {
+  const existing = loadConfig(env);
+  if (existing) {
+    return existing;
   }
+
+  const config = buildDefaultConfig(env);
+  saveConfig(config, env);
   return config;
 }
 
-export function saveConfig(config: CashClawConfig): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-  fs.chmodSync(CONFIG_PATH, 0o600);
-}
-
-/** Check if config has all required fields for running the agent */
-export function isConfigured(): boolean {
-  const config = loadConfig();
-  if (!config) return false;
-  return Boolean(config.agentId && config.llm?.apiKey && config.llm?.provider);
-}
-
-/** Save partial config fields, merging with existing config or defaults */
-export function savePartialConfig(partial: Partial<CashClawConfig>): CashClawConfig {
-  const existing = loadConfig();
-  const config = {
-    ...DEFAULT_CONFIG,
-    agentId: "",
-    llm: { provider: "anthropic" as const, model: "", apiKey: "" },
-    ...existing,
+export function savePartialConfig(
+  partial: Partial<WorkerConfig>,
+  env = process.env,
+): WorkerConfig {
+  const next = {
+    ...ensureConfig(env),
     ...partial,
   };
-  saveConfig(config);
-  return config;
+  saveConfig(next, env);
+  return next;
 }
 
-export function initConfig(opts: {
-  agentId: string;
-  provider: LLMConfig["provider"];
-  model?: string;
-  apiKey: string;
-  specialties?: string[];
-}): CashClawConfig {
-  const modelDefaults: Record<LLMConfig["provider"], string> = {
-    anthropic: "claude-sonnet-4-20250514",
-    openai: "gpt-4o",
-    openrouter: "anthropic/claude-sonnet-4-20250514",
+export function updatePausedState(paused: boolean, env = process.env): WorkerConfig {
+  const current = ensureConfig(env);
+  const next: WorkerConfig = {
+    ...current,
+    paused,
   };
-
-  const config: CashClawConfig = {
-    ...DEFAULT_CONFIG,
-    agentId: opts.agentId,
-    llm: {
-      provider: opts.provider,
-      model: opts.model ?? modelDefaults[opts.provider],
-      apiKey: opts.apiKey,
-    },
-    specialties: opts.specialties ?? [],
-  };
-
-  saveConfig(config);
-  return config;
-}
-
-export function getConfigDir(): string {
-  return CONFIG_DIR;
-}
-
-/** Check if AgentCash CLI wallet exists on disk */
-export function isAgentCashAvailable(): boolean {
-  const walletPath = path.join(os.homedir(), ".agentcash", "wallet.json");
-  return fs.existsSync(walletPath);
+  saveConfig(next, env);
+  return next;
 }

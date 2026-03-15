@@ -1,185 +1,202 @@
-import { useState, useEffect } from "react";
-import { Dashboard } from "./pages/Dashboard.js";
-import { Tasks } from "./pages/Tasks.js";
-import { Chat } from "./pages/Chat.js";
-import { Settings } from "./pages/Settings.js";
-import { Setup } from "./pages/Setup.js";
-import { api, type WalletInfo, type StatusData } from "./lib/api.js";
+import { useEffect, useState } from "react";
+import { api, type HealthData, type HistoryEntry, type PolicyData, type PortfolioData } from "./lib/api.js";
+import { History } from "./pages/History.js";
+import { Monitor } from "./pages/Monitor.js";
+import { Policy } from "./pages/Policy.js";
+import { Runbook } from "./pages/Runbook.js";
 
-type Page = "dashboard" | "tasks" | "chat" | "settings";
+type Page = "monitor" | "policy" | "history" | "runbook";
 
-const NAV: { page: Page; label: string; icon: string }[] = [
-  { page: "dashboard", label: "Monitor", icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4" },
-  { page: "tasks", label: "Tasks", icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
-  { page: "chat", label: "Chat", icon: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" },
-  { page: "settings", label: "Settings", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" },
+const NAV: Array<{ id: Page; label: string }> = [
+  { id: "monitor", label: "Monitor" },
+  { id: "policy", label: "Policy" },
+  { id: "history", label: "History" },
+  { id: "runbook", label: "Runbook" },
 ];
 
-function ClawLogo() {
-  return (
-    <svg width="30" height="30" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect width="30" height="30" rx="6" fill="#dc2626" />
-      <path
-        d="M8 19 C8 14.5, 10 9, 15 7 C12.5 11, 12.5 13.5, 13.5 16.5"
-        stroke="white" strokeWidth="2.2" strokeLinecap="round" fill="none"
-      />
-      <path
-        d="M15 7 C16.5 9.5, 17.5 12.5, 15.5 16.5"
-        stroke="white" strokeWidth="2.2" strokeLinecap="round" fill="none"
-      />
-      <path
-        d="M15 7 C19 9.5, 21 14.5, 21 19"
-        stroke="white" strokeWidth="2.2" strokeLinecap="round" fill="none"
-      />
-      <path
-        d="M10.5 18.5 C11.5 16.5, 13.5 16, 15 16.5 C16 16, 18 16.5, 19 17.5"
-        stroke="white" strokeWidth="1.5" strokeLinecap="round" fill="none" opacity="0.5"
-      />
-    </svg>
-  );
-}
-
 export function App() {
-  const [page, setPage] = useState<Page>("dashboard");
-  const [configured, setConfigured] = useState<boolean | null>(null);
-  const [status, setStatus] = useState<StatusData | null>(null);
-  const [wallet, setWallet] = useState<WalletInfo | null>(null);
+  const [page, setPage] = useState<Page>("monitor");
+  const [authorized, setAuthorized] = useState(Boolean(api.getStoredToken()));
+  const [health, setHealth] = useState<HealthData | null>(null);
+  const [policy, setPolicy] = useState<PolicyData | null>(null);
+  const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    api.getSetupStatus()
-      .then((s) => setConfigured(s.configured && s.mode === "running"))
-      .catch(() => setConfigured(false));
-  }, []);
-
-  useEffect(() => {
-    if (!configured) return;
-    function poll() {
-      api.getStatus().then(setStatus).catch((err) => console.warn("Status poll failed:", err));
-      api.getWalletCached().then(setWallet).catch(() => {});
+  async function loadAll(): Promise<void> {
+    try {
+      const [nextHealth, nextPolicy, nextPortfolio, nextHistory] = await Promise.all([
+        api.getHealth(),
+        api.getPolicy(),
+        api.getPortfolio(),
+        api.getHistory(50),
+      ]);
+      setHealth(nextHealth);
+      setPolicy(nextPolicy);
+      setPortfolio(nextPortfolio);
+      setHistory(nextHistory.entries);
+      setError(null);
+    } catch (loadError) {
+      if (loadError instanceof Error && loadError.message === "Unauthorized") {
+        api.clearToken();
+        setAuthorized(false);
+        setHealth(null);
+        setPolicy(null);
+        setPortfolio(null);
+        setHistory([]);
+      } else {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load worker state.");
+      }
     }
-    poll();
-    const interval = setInterval(poll, 5000);
-    return () => clearInterval(interval);
-  }, [configured]);
-
-  if (configured === null) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
-      </div>
-    );
   }
 
-  if (!configured) {
-    return <Setup onComplete={() => setConfigured(true)} />;
+  useEffect(() => {
+    if (!authorized) {
+      return;
+    }
+
+    void loadAll();
+    const interval = window.setInterval(() => {
+      void loadAll();
+    }, 10_000);
+
+    return () => window.clearInterval(interval);
+  }, [authorized]);
+
+  async function handlePauseResume(): Promise<void> {
+    if (!health) {
+      return;
+    }
+    setBusy(true);
+    try {
+      if (health.paused) {
+        await api.resume();
+      } else {
+        await api.pause();
+      }
+      await loadAll();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Action failed.");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  const isRunning = status?.running ?? false;
+  if (!authorized) {
+    return <TokenGate onSubmit={(token) => {
+      api.saveToken(token);
+      setAuthorized(true);
+    }} />;
+  }
 
   return (
-    <div className="min-h-screen flex">
-      {/* Sidebar */}
-      <aside className="w-[240px] shrink-0 border-r border-zinc-800/80 flex flex-col bg-[#0c0c0e] sticky top-0 h-screen">
-        {/* Logo */}
-        <div className="px-5 py-5 border-b border-zinc-800/60">
-          <div className="flex items-center gap-3">
-            <ClawLogo />
-            <div>
-              <h1 className="text-[15px] font-bold text-zinc-100 leading-none tracking-tight">CashClaw</h1>
-              <p className="text-[11px] text-zinc-600 leading-none mt-1">Autonomous Agent</p>
-            </div>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(71,208,170,0.18),_transparent_35%),linear-gradient(180deg,#091018,#05070b_55%,#040507)] text-white">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1440px] flex-col px-5 py-5 lg:flex-row lg:gap-5">
+        <aside className="mb-5 rounded-[30px] border border-white/10 bg-black/35 p-5 backdrop-blur lg:mb-0 lg:w-[280px] lg:shrink-0">
+          <div className="rounded-[26px] border border-emerald-300/15 bg-emerald-300/10 p-5">
+            <div className="text-[11px] uppercase tracking-[0.28em] text-emerald-100/70">Separate-host sidecar</div>
+            <div className="mt-3 text-2xl font-semibold tracking-tight text-white">OpenClaw Crypto Worker</div>
+            <p className="mt-3 text-sm leading-6 text-white/65">
+              Deterministic Base execution. No marketplace inbox, no in-process LLM autonomy, no wallet export path.
+            </p>
           </div>
-        </div>
 
-        {/* Nav */}
-        <nav className="flex-1 px-3 py-4 space-y-0.5">
-          {NAV.map((n) => (
+          <nav className="mt-5 space-y-2">
+            {NAV.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => setPage(item.id)}
+                className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm transition ${
+                  page === item.id
+                    ? "bg-white text-slate-950"
+                    : "border border-white/6 bg-white/[0.03] text-white/68 hover:border-white/14 hover:bg-white/[0.06]"
+                }`}
+              >
+                <span>{item.label}</span>
+                {item.id === "history" && history.length > 0 && (
+                  <span className={`rounded-full px-2 py-0.5 text-xs ${page === item.id ? "bg-slate-950/10" : "bg-white/8"}`}>
+                    {history.length}
+                  </span>
+                )}
+              </button>
+            ))}
+          </nav>
+
+          <div className="mt-5 rounded-[24px] border border-white/8 bg-white/[0.03] p-4">
+            <div className="text-[11px] uppercase tracking-[0.2em] text-white/40">Session</div>
+            <div className="mt-3 text-sm text-white/75">{health?.executionMode === "live" ? "Live signing enabled" : "Dry run only"}</div>
+            <div className="mt-2 text-sm text-white/55">{health?.paused ? "Worker paused" : "Worker unpaused"}</div>
             <button
-              key={n.page}
-              onClick={() => setPage(n.page)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-[13px] font-medium transition-colors ${
-                page === n.page
-                  ? "bg-zinc-800/80 text-zinc-100"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/40"
-              }`}
+              onClick={() => {
+                api.clearToken();
+                setAuthorized(false);
+              }}
+              className="mt-4 rounded-full border border-white/12 px-3 py-1.5 text-xs uppercase tracking-[0.2em] text-white/55 transition hover:border-white/25 hover:text-white/80"
             >
-              {page === n.page && (
-                <span className="w-[3px] h-4 rounded-full bg-red-500 -ml-1.5 mr-0.5 shrink-0" />
-              )}
-              <svg className="w-[17px] h-[17px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d={n.icon} />
-              </svg>
-              {n.label}
+              Forget token
             </button>
-          ))}
-        </nav>
-
-        {/* Bottom: Status + Wallet */}
-        <div className="px-4 py-4 border-t border-zinc-800/60 space-y-2.5">
-          <div className="flex items-center gap-2.5">
-            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isRunning ? "bg-emerald-400" : "bg-zinc-600"}`} />
-            <span className="text-[13px] text-zinc-400">
-              {isRunning ? "Running" : "Stopped"}
-            </span>
-            {status?.uptime !== undefined && isRunning && (
-              <span className="text-[11px] text-zinc-600 font-mono ml-auto readout">
-                {formatUptime(status.uptime)}
-              </span>
-            )}
           </div>
+        </aside>
 
-          {wallet && (
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-zinc-600 font-mono truncate">
-                {wallet.address.slice(0, 6)}...{wallet.address.slice(-4)}
-              </span>
-              {wallet.balance && (
-                <span className="text-[11px] text-zinc-400 font-mono readout">
-                  {parseFloat(wallet.balance).toFixed(4)} ETH
-                </span>
-              )}
-            </div>
+        <main className="flex-1 rounded-[34px] border border-white/10 bg-black/30 p-5 backdrop-blur lg:p-8">
+          {page === "monitor" && (
+            <Monitor
+              health={health}
+              policy={policy}
+              portfolio={portfolio}
+              busy={busy}
+              error={error}
+              onPauseResume={handlePauseResume}
+              onRefresh={loadAll}
+            />
           )}
-
-          <div className="flex items-center justify-between pt-1 border-t border-zinc-800/40">
-            <span className="text-[10px] text-zinc-700 font-mono">v0.1.0</span>
-            <SystemClock />
-          </div>
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <main className="flex-1 min-h-screen overflow-y-auto">
-        <div className="px-10 py-8">
-          {page === "dashboard" && <Dashboard />}
-          {page === "tasks" && <Tasks />}
-          {page === "chat" && <Chat />}
-          {page === "settings" && <Settings />}
-        </div>
-      </main>
+          {page === "policy" && <Policy policy={policy} />}
+          {page === "history" && <History entries={history} />}
+          {page === "runbook" && <Runbook />}
+        </main>
+      </div>
     </div>
   );
 }
 
-function SystemClock() {
-  const [time, setTime] = useState(new Date());
-
-  useEffect(() => {
-    const interval = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(interval);
-  }, []);
+function TokenGate(props: { onSubmit: (token: string) => void }) {
+  const [token, setToken] = useState("");
 
   return (
-    <span className="text-[10px] font-mono text-zinc-600 tabular-nums">
-      {time.toLocaleTimeString([], { hour12: false })}
-    </span>
-  );
-}
+    <div className="min-h-screen bg-[linear-gradient(180deg,#081017,#040508)] px-5 py-10 text-white">
+      <div className="mx-auto max-w-4xl rounded-[36px] border border-white/10 bg-[radial-gradient(circle_at_top_left,_rgba(102,221,190,0.18),_transparent_35%),rgba(5,7,10,0.88)] p-8 shadow-[0_24px_80px_rgba(0,0,0,0.35)] lg:p-12">
+        <div className="text-[11px] uppercase tracking-[0.3em] text-emerald-100/70">Authenticated operator dashboard</div>
+        <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white">Enter the worker token to continue.</h1>
+        <p className="mt-4 max-w-2xl text-sm leading-6 text-white/65">
+          Keep the dashboard behind Tailscale and use the same bearer token your OpenClaw `crypto_worker` wrapper uses.
+          The browser never needs wallet material, RPC keys, or recovery phrases.
+        </p>
 
-function formatUptime(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+        <form
+          className="mt-8 max-w-2xl space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (token.trim()) {
+              props.onSubmit(token);
+            }
+          }}
+        >
+          <input
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+            type="password"
+            placeholder="CRYPTO_WORKER_TOKEN"
+            className="w-full rounded-[22px] border border-white/12 bg-black/30 px-5 py-4 text-white placeholder:text-white/30 focus:border-emerald-300/50 focus:outline-none"
+          />
+          <button
+            type="submit"
+            className="rounded-full bg-emerald-300 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
+          >
+            Unlock dashboard
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }
