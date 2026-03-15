@@ -168,14 +168,47 @@ export function loadConfig(env = process.env): WorkerConfig | null {
 }
 
 export function ensureConfig(env = process.env): WorkerConfig {
+  const desired = buildDefaultConfig(env);
   const existing = loadConfig(env);
-  if (existing) {
-    return existing;
+  if (!existing) {
+    saveConfig(desired, env);
+    return desired;
   }
 
-  const config = buildDefaultConfig(env);
-  saveConfig(config, env);
-  return config;
+  const merged: WorkerConfig = {
+    ...existing,
+    executionMode: desired.executionMode,
+    chain: {
+      ...existing.chain,
+      ...desired.chain,
+    },
+    server: {
+      ...existing.server,
+      ...desired.server,
+    },
+    wallet: {
+      ...existing.wallet,
+      ...desired.wallet,
+    },
+    authTokenHash: desired.authTokenHash,
+    pair: desired.pair,
+    allowedPairs: [...desired.allowedPairs],
+    tokens: {
+      USDC: { ...desired.tokens.USDC },
+      WETH: { ...desired.tokens.WETH },
+    },
+    uniswap: {
+      ...desired.uniswap,
+      routerAllowlist: [...desired.uniswap.routerAllowlist],
+      spenderAllowlist: [...desired.uniswap.spenderAllowlist],
+    },
+  };
+
+  if (JSON.stringify(existing) !== JSON.stringify(merged)) {
+    saveConfig(merged, env);
+  }
+
+  return merged;
 }
 
 export function savePartialConfig(
