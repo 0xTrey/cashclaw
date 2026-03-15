@@ -21,9 +21,9 @@ Official sources used:
 - `bootstrap-ubuntu-worker.sh`
   - Run once as `root` on a fresh Ubuntu 24.04 or 22.04 host
 - `deploy-worker-host.sh`
-  - Run as the `worker` user after the repo is copied onto the VM and secrets exist
+  - Run as `root` after the repo is copied onto the VM and live secrets exist
 - `deploy-worker-host-dry-run.sh`
-  - Run as the `worker` user for a safe first boot with no private key and no funds
+  - Run as `root` for a safe first boot with no private key and no funds
 - `docker-compose.vm.yml`
   - Live-mode deployment bound to the Tailscale IP only
 - `docker-compose.vm-dry-run.yml`
@@ -41,7 +41,7 @@ sudo sh -c 'openssl rand -hex 24 > /etc/openclaw-crypto-worker/secrets/crypto_wo
 sudo sh -c 'printf "%s\n" "0x000000000000000000000000000000000000dEaD" > /etc/openclaw-crypto-worker/secrets/burner_wallet_address.txt'
 sudo chmod 600 /etc/openclaw-crypto-worker/secrets/*.txt
 sudo chown -R worker:worker /home/worker/openclaw-crypto-worker
-sudo -u worker bash /home/worker/openclaw-crypto-worker/ops/vm/deploy-worker-host-dry-run.sh
+bash /home/worker/openclaw-crypto-worker/ops/vm/deploy-worker-host-dry-run.sh
 ```
 
 This starts the worker in `dry-run` mode with a placeholder wallet address so you can test the full remote flow before creating or funding a burner wallet.
@@ -62,7 +62,7 @@ sudo sh -c 'openssl rand -hex 24 > /etc/openclaw-crypto-worker/secrets/crypto_wo
 sudo sh -c 'printf "%s\n" "0xYOUR_BURNER_PRIVATE_KEY" > /etc/openclaw-crypto-worker/secrets/burner_private_key.txt'
 sudo chmod 600 /etc/openclaw-crypto-worker/secrets/*.txt
 sudo chown -R worker:worker /home/worker/openclaw-crypto-worker
-sudo -u worker bash /home/worker/openclaw-crypto-worker/ops/vm/deploy-worker-host.sh
+bash /home/worker/openclaw-crypto-worker/ops/vm/deploy-worker-host.sh
 ```
 
 ## Mac cutover

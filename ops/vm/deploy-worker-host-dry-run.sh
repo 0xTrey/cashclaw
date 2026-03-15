@@ -6,16 +6,21 @@ WORKER_HOME="/home/${WORKER_USER}"
 APP_ROOT="${APP_ROOT:-${WORKER_HOME}/openclaw-crypto-worker}"
 SECRETS_DIR="${SECRETS_DIR:-/etc/openclaw-crypto-worker/secrets}"
 
+if [[ "${EUID}" -ne 0 ]]; then
+  echo "Run as root so secrets can be copied safely into the worker runtime." >&2
+  exit 1
+fi
+
 cd "${APP_ROOT}"
 
-mkdir -p ops/vm/runtime-secrets ops/vm/runtime-state
+install -d -m 0700 -o "${WORKER_USER}" -g "${WORKER_USER}" ops/vm/runtime-secrets ops/vm/runtime-state
 
-cp "${SECRETS_DIR}/base_rpc_url.txt" ops/vm/runtime-secrets/base_rpc_url.txt
-cp "${SECRETS_DIR}/crypto_worker_token.txt" ops/vm/runtime-secrets/crypto_worker_token.txt
-cp "${SECRETS_DIR}/burner_wallet_address.txt" ops/vm/runtime-secrets/burner_wallet_address.txt
-
-chmod 0700 ops/vm/runtime-secrets ops/vm/runtime-state
-chmod 0600 ops/vm/runtime-secrets/*.txt
+install -m 0600 -o "${WORKER_USER}" -g "${WORKER_USER}" \
+  "${SECRETS_DIR}/base_rpc_url.txt" ops/vm/runtime-secrets/base_rpc_url.txt
+install -m 0600 -o "${WORKER_USER}" -g "${WORKER_USER}" \
+  "${SECRETS_DIR}/crypto_worker_token.txt" ops/vm/runtime-secrets/crypto_worker_token.txt
+install -m 0600 -o "${WORKER_USER}" -g "${WORKER_USER}" \
+  "${SECRETS_DIR}/burner_wallet_address.txt" ops/vm/runtime-secrets/burner_wallet_address.txt
 
 TAILSCALE_IP="$(tailscale ip -4 | head -n 1)"
 if [[ -z "${TAILSCALE_IP}" ]]; then
@@ -23,9 +28,11 @@ if [[ -z "${TAILSCALE_IP}" ]]; then
   exit 1
 fi
 
-export OPENCLAW_CRYPTO_VM_TAILSCALE_IP="${TAILSCALE_IP}"
-
-docker compose -f ops/vm/docker-compose.vm-dry-run.yml up --build -d
+su - "${WORKER_USER}" -c "
+  cd '${APP_ROOT}' && \
+  export OPENCLAW_CRYPTO_VM_TAILSCALE_IP='${TAILSCALE_IP}' && \
+  docker compose -f ops/vm/docker-compose.vm-dry-run.yml up --build -d
+"
 
 TOKEN="$(tr -d '\n' < ops/vm/runtime-secrets/crypto_worker_token.txt)"
 echo "Dry-run worker deployed."
