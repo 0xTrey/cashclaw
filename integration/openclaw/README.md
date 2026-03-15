@@ -53,7 +53,8 @@ Use this message payload for an hourly job after you have manually reviewed the 
 
 ```text
 Run /Users/treyharnden/Projects/cashclaw-security-review/integration/openclaw/crypto_worker status, then policy, then portfolio.
-If the worker is paused, in dry-run mode, or any hard cap is already reached, stop.
-If all checks pass, you may submit at most one trade with /Users/treyharnden/Projects/cashclaw-security-review/integration/openclaw/crypto_worker trade.
-Keep the thesis under 120 characters, use at most $5, and never attempt any action outside the wrapper commands.
+If mode is not live, gas is below reserve, any hard cap is already reached, or balances do not safely support a $5 trade, stop.
+You may resume the worker, submit at most one $5 trade with /Users/treyharnden/Projects/cashclaw-security-review/integration/openclaw/crypto_worker trade, then immediately pause the worker again.
+Keep the thesis under 120 characters and never attempt any action outside the wrapper commands.
+If any step fails, pause the worker and stop.
 ```

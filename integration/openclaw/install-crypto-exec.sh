@@ -29,7 +29,7 @@ Review these next steps before letting OpenClaw use the worker:
      openclaw sandbox explain --agent ${AGENT_ID}
      openclaw approvals get --json
   4. Optional hourly bounded autonomy:
-     openclaw cron add --agent ${AGENT_ID} --session isolated --every 1h --name crypto-sidecar-hourly --message "Call ${WRAPPER_PATH} status, then policy, then portfolio. If the worker is paused, over risk limits, or in dry-run mode, stop. Otherwise you may submit at most one trade via ${WRAPPER_PATH} trade using a thesis under 120 characters."
+     openclaw cron add --agent ${AGENT_ID} --session isolated --every 1h --light-context --thinking minimal --timeout-seconds 180 --no-deliver --name crypto-sidecar-hourly --message "Run ${WRAPPER_PATH} status, then policy, then portfolio. If mode is not live, stop. If gas is below reserve, any hard cap is reached, or balances do not safely support a \$5 trade, stop. You may resume the worker, submit at most one \$5 trade with ${WRAPPER_PATH} trade using a thesis under 120 characters, then immediately pause the worker again. If any step fails, pause the worker and stop. Never run anything outside ${WRAPPER_PATH}."
 
 Read:
   ${SCRIPT_DIR}/README.md

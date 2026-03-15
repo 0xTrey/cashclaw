@@ -1,5 +1,6 @@
 services:
   openclaw-crypto-worker:
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: ops/Dockerfile
