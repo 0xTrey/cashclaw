@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -14,7 +15,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 WORKER = SCRIPT_DIR / "crypto_worker"
 TIMEZONE = ZoneInfo("America/Chicago")
 HOURLY_CRON_NAME = os.environ.get("OPENCLAW_CRYPTO_HOURLY_CRON_NAME", "crypto-sidecar-hourly")
-DAILY_BRIEF_CRON_NAME = os.environ.get("OPENCLAW_CRYPTO_DAILY_BRIEF_CRON_NAME", "Kai - Crypto Sidecar Daily Brief")
+DAILY_BRIEF_LABEL = os.environ.get("OPENCLAW_CRYPTO_DAILY_BRIEF_LABEL", "com.trey.openclaw.crypto-kai-brief")
+DAILY_BRIEF_CHANNEL = os.environ.get("OPENCLAW_KAI_DISCORD_CHANNEL", "discord")
+DAILY_BRIEF_TARGET = os.environ.get("OPENCLAW_KAI_DISCORD_TARGET", "#kai-ee-ceo")
+DAILY_BRIEF_HOUR = int(os.environ.get("OPENCLAW_CRYPTO_DAILY_BRIEF_HOUR", "10"))
+DAILY_BRIEF_MINUTE = int(os.environ.get("OPENCLAW_CRYPTO_DAILY_BRIEF_MINUTE", "21"))
 
 
 def run_json(command: list[str]) -> tuple[Any | None, str | None]:
@@ -25,6 +30,13 @@ def run_json(command: list[str]) -> tuple[Any | None, str | None]:
       return json.loads(completed.stdout), None
     except json.JSONDecodeError as exc:
       return None, f"Failed to parse JSON from {' '.join(command)}: {exc}"
+
+
+def run_text(command: list[str]) -> tuple[str | None, str | None]:
+    completed = subprocess.run(command, text=True, capture_output=True)
+    if completed.returncode != 0:
+      return None, completed.stderr.strip() or completed.stdout.strip() or f"{command[0]} exited with {completed.returncode}"
+    return completed.stdout, None
 
 
 def fmt_ms(ms: int | None) -> str:
@@ -52,6 +64,13 @@ def line(text: str = "") -> None:
     print(text)
 
 
+def next_daily_run(now: datetime) -> datetime:
+    candidate = now.replace(hour=DAILY_BRIEF_HOUR, minute=DAILY_BRIEF_MINUTE, second=0, microsecond=0)
+    if candidate <= now:
+      candidate += timedelta(days=1)
+    return candidate
+
+
 def main() -> int:
     now = datetime.now(TIMEZONE)
     since = now - timedelta(hours=24)
@@ -61,6 +80,16 @@ def main() -> int:
     portfolio, portfolio_error = run_json([str(WORKER), "portfolio"])
     history, history_error = run_json([str(WORKER), "history", "--limit", "500"])
     cron_list, cron_error = run_json(["/opt/homebrew/bin/openclaw", "cron", "list", "--json"])
+    brief_messages, brief_messages_error = run_json([
+      "/opt/homebrew/bin/openclaw", "message", "read",
+      "--channel", DAILY_BRIEF_CHANNEL,
+      "--target", DAILY_BRIEF_TARGET,
+      "--limit", "10",
+      "--json",
+    ])
+    launch_agent_output, launch_agent_error = run_text([
+      "launchctl", "print", f"gui/{os.getuid()}/{DAILY_BRIEF_LABEL}"
+    ])
 
     entries = []
     if history and isinstance(history, dict):
@@ -79,7 +108,22 @@ def main() -> int:
 
     jobs = cron_list.get("jobs", []) if isinstance(cron_list, dict) else []
     hourly_job = next((job for job in jobs if job.get("name") == HOURLY_CRON_NAME), None)
-    daily_job = next((job for job in jobs if job.get("name") == DAILY_BRIEF_CRON_NAME), None)
+    last_posted_brief_ms = None
+    if isinstance(brief_messages, dict):
+      for message in brief_messages.get("payload", {}).get("messages", []):
+        if not isinstance(message, dict):
+          continue
+        if not str(message.get("content", "")).startswith("Kai Crypto Sidecar Daily Brief"):
+          continue
+        timestamp_ms = message.get("timestampMs")
+        if isinstance(timestamp_ms, int):
+          last_posted_brief_ms = max(last_posted_brief_ms or 0, timestamp_ms)
+
+    launch_runs = None
+    if launch_agent_output:
+      match = re.search(r"runs = (\d+)", launch_agent_output)
+      if match:
+        launch_runs = match.group(1)
 
     line("Kai Crypto Sidecar Daily Brief")
     line(f"Window: {since.strftime('%Y-%m-%d %I:%M %p %Z')} to {now.strftime('%Y-%m-%d %I:%M %p %Z')}")
@@ -133,16 +177,21 @@ def main() -> int:
         line(f"- Consecutive errors: {state.get('consecutiveErrors')}")
 
     line("")
-    line("Daily brief job")
-    if cron_error:
-      line(f"- Daily brief cron: error ({cron_error})")
-    elif not daily_job:
-      line(f"- {DAILY_BRIEF_CRON_NAME}: missing")
+    line("Daily brief delivery")
+    if launch_agent_error:
+      line(f"- Local scheduler: error ({launch_agent_error})")
     else:
-      state = daily_job.get("state", {})
-      line(f"- {DAILY_BRIEF_CRON_NAME}: {'enabled' if daily_job.get('enabled') else 'disabled'}")
-      line(f"- Last run: {fmt_ms(state.get('lastRunAtMs'))} ({state.get('lastRunStatus', 'n/a')})")
-      line(f"- Next run: {fmt_ms(state.get('nextRunAtMs'))}")
+      line(f"- Local scheduler: loaded ({DAILY_BRIEF_LABEL})")
+      line(f"- Delivery target: {DAILY_BRIEF_TARGET}")
+      line(f"- Next scheduled send: {next_daily_run(now).strftime('%Y-%m-%d %I:%M %p %Z')}")
+      if launch_runs is not None:
+        line(f"- Local scheduler runs: {launch_runs}")
+    if brief_messages_error:
+      line(f"- Last posted brief: error ({brief_messages_error})")
+    elif last_posted_brief_ms:
+      line(f"- Last posted brief: {fmt_ms(last_posted_brief_ms)}")
+    else:
+      line("- Last posted brief: not found in recent channel history")
 
     line("")
     line("Notable actions")

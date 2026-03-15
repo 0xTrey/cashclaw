@@ -73,4 +73,24 @@ It summarizes:
 - current mode, pause state, and balances
 - trades, failures, and rejects from the last 24 hours
 - hourly cron health and next run time
-- the daily brief cron status itself
+- local daily Discord delivery health and last posted brief
+
+## Direct daily Discord delivery
+
+If OpenClaw cron delivery is flaky, prefer the local sender. This is the recommended path for the daily Kai update to `#kai-ee-ceo`:
+
+```bash
+/Users/treyharnden/Projects/cashclaw-security-review/integration/openclaw/send_kai_crypto_brief.sh
+```
+
+That script:
+
+- runs the read-only daily brief wrapper
+- splits long output into Discord-safe chunks
+- sends directly to `#kai-ee-ceo` with `openclaw message send`
+
+To install the local 10:21 AM launchd schedule:
+
+```bash
+/Users/treyharnden/Projects/cashclaw-security-review/ops/macos/install-kai-crypto-brief-launchagent.sh
+```
