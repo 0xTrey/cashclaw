@@ -35,9 +35,9 @@ su - "${WORKER_USER}" -c "
   docker compose -f ops/vm/docker-compose.vm.yml up --build -d
 "
 
-TOKEN="$(tr -d '\n' < ops/vm/runtime-secrets/crypto_worker_token.txt)"
 echo "Worker deployed."
 echo "Tailscale URL: http://${TAILSCALE_IP}:3777"
 echo "Token file: ${SECRETS_DIR}/crypto_worker_token.txt"
 echo "Health check:"
-echo "curl -H 'Authorization: Bearer ${TOKEN}' http://${TAILSCALE_IP}:3777/api/health"
+echo "TOKEN=\$(cat ${SECRETS_DIR}/crypto_worker_token.txt)"
+echo "curl -H \"Authorization: Bearer \$TOKEN\" http://${TAILSCALE_IP}:3777/api/health"
