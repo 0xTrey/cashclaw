@@ -115,6 +115,12 @@ function getPrivateKey(envVarName: string, env = process.env): Hex | null {
   return value ? value as Hex : null;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function assertAllowedExecutionPlan(config: WorkerConfig, quote: QuoteData): void {
   const { executionPlan } = quote;
   if (!config.uniswap.routerAllowlist.includes(executionPlan.router)) {
@@ -139,6 +145,35 @@ class ViemTradingService implements TradingService {
   private referencePriceCache: { value: number; fetchedAt: number } | null = null;
 
   constructor(private readonly env = process.env) {}
+
+  private isRetryableRpcError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes("Status: 429")
+      || message.includes("over rate limit")
+      || message.includes("\"code\":-32016");
+  }
+
+  private async withRpcRetries<T>(label: string, operation: () => Promise<T>): Promise<T> {
+    let lastError: unknown;
+    const maxAttempts = 4;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (!this.isRetryableRpcError(error) || attempt === maxAttempts) {
+          throw error;
+        }
+
+        await sleep(300 * attempt);
+      }
+    }
+
+    throw lastError instanceof Error
+      ? new Error(`${label} failed after retries: ${lastError.message}`)
+      : new Error(`${label} failed after retries.`);
+  }
 
   private createClients(config: WorkerConfig) {
     const transport = http(config.chain.rpcUrl);
@@ -168,7 +203,7 @@ class ViemTradingService implements TradingService {
     }
 
     const { publicClient } = this.createClients(config);
-    const pool = await publicClient.readContract({
+    const pool = await this.withRpcRetries("ensurePool", () => publicClient.readContract({
       abi: FACTORY_ABI,
       address: config.uniswap.factory,
       functionName: "getPool",
@@ -177,7 +212,7 @@ class ViemTradingService implements TradingService {
         config.tokens.WETH.address,
         config.uniswap.poolFee,
       ],
-    });
+    }));
 
     if (pool === zeroAddress) {
       throw new Error("Pinned Uniswap V3 pool was not found on Base.");
@@ -194,7 +229,7 @@ class ViemTradingService implements TradingService {
 
     const { publicClient } = this.createClients(config);
     const oneWeth = parseUnits("1", config.tokens.WETH.decimals);
-    const quoteResult = await publicClient.readContract({
+    const quoteResult = await this.withRpcRetries("getReferencePriceUsd", () => publicClient.readContract({
       abi: QUOTER_V2_ABI,
       address: config.uniswap.quoterV2,
       functionName: "quoteExactInputSingle",
@@ -205,7 +240,7 @@ class ViemTradingService implements TradingService {
         fee: config.uniswap.poolFee,
         sqrtPriceLimitX96: 0n,
       }],
-    }) as readonly [bigint, bigint, number, bigint];
+    })) as readonly [bigint, bigint, number, bigint];
     const amountOut = quoteResult[0];
 
     const value = Number(formatUnits(amountOut, config.tokens.USDC.decimals));
@@ -218,17 +253,17 @@ class ViemTradingService implements TradingService {
     token: "USDC" | "WETH",
   ): Promise<bigint> {
     const { publicClient } = this.createClients(config);
-    return publicClient.readContract({
+    return this.withRpcRetries(`getTokenBalance:${token}`, () => publicClient.readContract({
       abi: erc20Abi,
       address: config.tokens[token].address,
       functionName: "balanceOf",
       args: [config.wallet.address],
-    });
+    }));
   }
 
   private async getNativeBalance(config: WorkerConfig): Promise<bigint> {
     const { publicClient } = this.createClients(config);
-    return publicClient.getBalance({ address: config.wallet.address });
+    return this.withRpcRetries("getNativeBalance", () => publicClient.getBalance({ address: config.wallet.address }));
   }
 
   private async getAllowance(
@@ -240,12 +275,12 @@ class ViemTradingService implements TradingService {
     if (!account) {
       return 0n;
     }
-    return publicClient.readContract({
+    return this.withRpcRetries("getAllowance", () => publicClient.readContract({
       abi: erc20Abi,
       address: tokenAddress,
       functionName: "allowance",
       args: [account.address, spender],
-    });
+    }));
   }
 
   async getPortfolio(config: WorkerConfig): Promise<PortfolioSnapshot> {
@@ -293,7 +328,7 @@ class ViemTradingService implements TradingService {
       ? parseUsdAmount(request.notionalUsd, tokenIn.decimals)
       : parseUsdAmount(request.notionalUsd / referencePriceUsd, tokenIn.decimals);
 
-    const quoteResult = await publicClient.readContract({
+    const quoteResult = await this.withRpcRetries("quote", () => publicClient.readContract({
       abi: QUOTER_V2_ABI,
       address: config.uniswap.quoterV2,
       functionName: "quoteExactInputSingle",
@@ -304,7 +339,7 @@ class ViemTradingService implements TradingService {
         fee: config.uniswap.poolFee,
         sqrtPriceLimitX96: 0n,
       }],
-    }) as readonly [bigint, bigint, number, bigint];
+    })) as readonly [bigint, bigint, number, bigint];
     const amountOutRaw = quoteResult[0];
 
     const amountOutUsd = request.side === "buy"
@@ -374,32 +409,33 @@ class ViemTradingService implements TradingService {
     const amountInRaw = BigInt(quote.amountIn.raw);
     const minAmountOutRaw = BigInt(quote.minAmountOut.raw);
 
-    const preTokenIn = await this.getTokenBalance(config, quote.amountIn.symbol);
-    const preTokenOut = await this.getTokenBalance(config, quote.amountOut.symbol);
-    const preAllowance = await this.getAllowance(
-      config,
-      tokenInConfig.address,
-      quote.executionPlan.spender,
-    );
-
     let approvalHash: Hex | undefined;
     let swapHash: Hex | undefined;
     let revokeHash: Hex | undefined;
 
     try {
+      const preTokenIn = await this.getTokenBalance(config, quote.amountIn.symbol);
+      const preTokenOut = await this.getTokenBalance(config, quote.amountOut.symbol);
+      const preAllowance = await this.getAllowance(
+        config,
+        tokenInConfig.address,
+        quote.executionPlan.spender,
+      );
+
       if (preAllowance < amountInRaw) {
-        const approvalSimulation = await publicClient.simulateContract({
+        const approvalSimulation = await this.withRpcRetries("simulateApproval", () => publicClient.simulateContract({
           account,
           abi: erc20Abi,
           address: tokenInConfig.address,
           functionName: "approve",
           args: [quote.executionPlan.spender, amountInRaw],
-        });
-        approvalHash = await walletClient.writeContract(approvalSimulation.request);
-        await publicClient.waitForTransactionReceipt({ hash: approvalHash });
+        }));
+        const approvalTxHash = await walletClient.writeContract(approvalSimulation.request);
+        approvalHash = approvalTxHash;
+        await this.withRpcRetries("waitForApprovalReceipt", () => publicClient.waitForTransactionReceipt({ hash: approvalTxHash }));
       }
 
-      const swapSimulation = await publicClient.simulateContract({
+      const swapSimulation = await this.withRpcRetries("simulateSwap", () => publicClient.simulateContract({
         account,
         abi: SWAP_ROUTER_ABI,
         address: quote.executionPlan.router,
@@ -413,10 +449,11 @@ class ViemTradingService implements TradingService {
           amountOutMinimum: minAmountOutRaw,
           sqrtPriceLimitX96: 0n,
         }],
-      });
+      }));
 
-      swapHash = await walletClient.writeContract(swapSimulation.request);
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
+      const submittedSwapHash = await walletClient.writeContract(swapSimulation.request);
+      swapHash = submittedSwapHash;
+      const receipt = await this.withRpcRetries("waitForSwapReceipt", () => publicClient.waitForTransactionReceipt({ hash: submittedSwapHash }));
       if (receipt.status !== "success") {
         throw new Error(`Swap receipt returned status ${receipt.status}.`);
       }
@@ -432,15 +469,16 @@ class ViemTradingService implements TradingService {
         quote.executionPlan.spender,
       );
       if (remainingAllowance > 0n) {
-        const revokeSimulation = await publicClient.simulateContract({
+        const revokeSimulation = await this.withRpcRetries("simulateRevoke", () => publicClient.simulateContract({
           account,
           abi: erc20Abi,
           address: tokenInConfig.address,
           functionName: "approve",
           args: [quote.executionPlan.spender, 0n],
-        });
-        revokeHash = await walletClient.writeContract(revokeSimulation.request);
-        await publicClient.waitForTransactionReceipt({ hash: revokeHash });
+        }));
+        const revokeTxHash = await walletClient.writeContract(revokeSimulation.request);
+        revokeHash = revokeTxHash;
+        await this.withRpcRetries("waitForRevokeReceipt", () => publicClient.waitForTransactionReceipt({ hash: revokeTxHash }));
       }
 
       return {
@@ -472,15 +510,16 @@ class ViemTradingService implements TradingService {
           quote.executionPlan.spender,
         );
         if (remainingAllowance > 0n) {
-          const revokeSimulation = await publicClient.simulateContract({
+          const revokeSimulation = await this.withRpcRetries("simulateRevokeCleanup", () => publicClient.simulateContract({
             account,
             abi: erc20Abi,
             address: tokenInConfig.address,
             functionName: "approve",
             args: [quote.executionPlan.spender, 0n],
-          });
-          revokeHash = await walletClient.writeContract(revokeSimulation.request);
-          await publicClient.waitForTransactionReceipt({ hash: revokeHash });
+          }));
+          const cleanupRevokeTxHash = await walletClient.writeContract(revokeSimulation.request);
+          revokeHash = cleanupRevokeTxHash;
+          await this.withRpcRetries("waitForRevokeCleanupReceipt", () => publicClient.waitForTransactionReceipt({ hash: cleanupRevokeTxHash }));
         }
       } catch {
         // Best-effort cleanup. The API response still exposes the failed status.
